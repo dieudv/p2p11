@@ -650,10 +650,12 @@
         if (guestConn === conn) { guestId = null; guestConn = null; }
       });
     });
-    peer.on('call', c => {
+    peer.on('call', async c => {
       if (me !== peer) return;
       if (c.peer !== guestId) { c.close(); return; } // only the admitted guest
       if (call) { const o = call; call = null; try { o.close(); } catch (_) {} } // guest redialled after a network drop
+      await ensureMedia();
+      if (me !== peer) return;
       c.answer(outStream());
       bind(c);
     });
@@ -681,6 +683,9 @@
         }
         return;
       }
+      if (err.type === 'peer-unavailable' && !call && !gateDone && ++missTries <= 5) {
+        clearTimeout(recTimer); recTimer = setTimeout(dialHost, 3000); return;
+      }
       fail(err);
     });
   }
@@ -691,6 +696,7 @@
     const conn = peer.connect(PREFIX + room, { reliable: true });
     gateConn = conn;
     setTimeout(() => { if (!gateDone && !call && !recovering && $('pwDialog').hidden) setStatus('connectSlow'); }, 20000);
+    setTimeout(() => { if (gateConn === conn && !conn.open && !gateDone && !call && ++missTries <= 5) dialHost(); }, 15000);
     conn.on('data', d => onGate(conn, d));
     conn.on('close', () => { if (gateConn === conn && !call && !gateDone) { hidePwDialog(); setStatus(recovering ? 'reconnecting' : 'gateClosed'); } });
   }
@@ -729,6 +735,28 @@
       setTimeout(() => { if (inCall && p === peer && p.disconnected && !p.destroyed) { try { p.reconnect(); } catch (_) {} } }, Math.min(8000, 1000 * ++sigTries));
     });
   }
+
+  async function ensureMedia() {
+    const dead = stream.getTracks().filter(x => x.readyState === 'ended');
+    if (!dead.length) return;
+    try {
+      const ns = await navigator.mediaDevices.getUserMedia({
+        audio: dead.some(x => x.kind === 'audio') ? audioConstraints() : false,
+        video: dead.some(x => x.kind === 'video') ? { width: 1280, height: 720 } : false });
+      dead.forEach(x => stream.removeTrack(x));
+      ns.getTracks().forEach(n => { n.enabled = (dead.find(x => x.kind === n.kind) || n).enabled; stream.addTrack(n); });
+      setLocalMeter(); updateRear();
+      $('local').srcObject = null; $('local').srcObject = stream;
+    } catch (_) {}
+  }
+
+  function refreshSignal() {
+    if (!inCall || !isHost || !peer || peer.destroyed || call || guestConn || pending.size) return;
+    if (peer.disconnected) { try { peer.reconnect(); } catch (_) {} }
+    else peer.disconnect(); // 'disconnected' handler reconnects with the same id
+  }
+  setInterval(refreshSignal, 60000);
+
   function watchPc(c) {
     const pc = c.peerConnection;
     if (!pc) return;
@@ -814,6 +842,7 @@
     if (!inCall) return;
     if (recovering) redial();
     else if (startedAt) setTimeout(probe, 1000);
+    else refreshSignal();
   }
   window.addEventListener('online', onNetChange);
   window.addEventListener('offline', () => { if (startedAt) linkLost(); });
@@ -2133,6 +2162,11 @@
   function admit(conn, hp) {
     guestId = conn.peer; guestConn = conn;
     conn.send(hp ? { type: 'welcome', hp } : { type: 'welcome' });
+    setTimeout(() => {
+      if (guestConn === conn && !call && !startedAt && !recovering) {
+        guestId = null; guestConn = null; try { conn.close(); } catch (_) {}
+      }
+    }, 30000);
   }
   async function handleProof(conn, d) {
     const p = pending.get(conn);
@@ -2200,6 +2234,7 @@
         return;
       }
       gateDone = true; hidePwDialog();
+      await ensureMedia(); if (call) return;
       bind(peer.call(PREFIX + room, outStream()));
     } else if (d.type === 'full') {
       gateDone = true; setStatus('full');
@@ -2305,7 +2340,7 @@
     } catch (_) { wakeLock = null; } // denied, e.g. low battery mode
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') keepAwake();
+    if (document.visibilityState === 'visible') { keepAwake(); if (inCall) ensureMedia(); }
   });
 
   // Opened via a room link: prefill the code and wait for a click so the browser can ask for camera permission.
