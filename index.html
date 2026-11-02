@@ -300,7 +300,6 @@
     <label class="check"><input type="checkbox" id="fxAgc"><span data-i18n="lblAgc"></span></label>
     <label id="spkRow"><span data-i18n="lblSpk"></span><select id="selSpk"></select></label>
     <label><span data-i18n="lblQuality"></span><select id="selQuality"></select></label>
-    <label class="check"><input type="checkbox" id="muteSharedChk"><span data-i18n="lblMuteShared"></span></label>
     <label class="check"><input type="checkbox" id="soundChk"><span data-i18n="lblSound"></span></label>
     <label class="check"><input type="checkbox" id="mirrorChk"><span data-i18n="lblMirror"></span></label>
     <p class="err" id="devErr" role="alert"></p>
@@ -384,7 +383,6 @@
       ytBad: 'Link YouTube không hợp lệ.', ytLoadFail: 'Không tải được trình phát YouTube.', ytClose: 'Dừng nghe chung',
       ytInviteMsg: 'Người kia mời bạn nghe chung một video YouTube.', ytJoin: 'Tham gia', ytDecline: 'Bỏ qua', ytStopped: 'Người kia đã dừng nghe chung.',
       ytError: 'Video này không phát được (có thể bị tắt nhúng hoặc bị chặn ở khu vực của bạn).',
-      lblMuteShared: 'Khi chia sẻ tab, tắt tiếng tab đó trên máy tôi (tránh vọng)', shareAudioOn: 'Đang chia sẻ cả âm thanh của tab.',
       lblQuality: 'Chất lượng video gửi đi', qAuto: 'Tự động', qHigh: 'Cao (720p)', qMedium: 'Trung bình (480p)', qLow: 'Thấp (360p)', qSaver: 'Tiết kiệm dữ liệu (240p)',
       flipCam: 'Đổi camera trước/sau', flipFail: 'Không đổi được camera.', bigFlip: 'Lật video màn hình lớn',
       inviteTitle: 'Đang chờ người kia vào', inviteSub: 'Gửi link này để mời họ vào phòng:', inviteLinkLbl: 'Link phòng', inviteShare: 'Chia sẻ', inviteCopy: 'Sao chép',
@@ -437,7 +435,6 @@
       ytBad: 'That is not a valid YouTube link.', ytLoadFail: 'Could not load the YouTube player.', ytClose: 'Stop watching together',
       ytInviteMsg: 'The other person invited you to watch a YouTube video together.', ytJoin: 'Join', ytDecline: 'Dismiss', ytStopped: 'The other person stopped watching together.',
       ytError: 'This video cannot be played (embedding may be disabled, or it is blocked in your region).',
-      lblMuteShared: 'When sharing a tab, mute it on my device (avoids echo)', shareAudioOn: 'Tab audio is being shared too.',
       lblQuality: 'Outgoing video quality', qAuto: 'Auto', qHigh: 'High (720p)', qMedium: 'Medium (480p)', qLow: 'Low (360p)', qSaver: 'Data saver (240p)',
       flipCam: 'Switch front/back camera', flipFail: 'Could not switch camera.', bigFlip: 'Flip main video',
       inviteTitle: 'Waiting for the other person', inviteSub: 'Send them this link to join the room:', inviteLinkLbl: 'Room link', inviteShare: 'Share', inviteCopy: 'Copy',
@@ -1383,18 +1380,6 @@
     $('bigFlipBtn').hidden = !startedAt;
   }
 
-  // Shared tab audio and the microphone are mixed into ONE audio track with Web Audio. That track replaces the
-  // microphone track on the existing connection (no renegotiation needed). Muting the mic keeps the tab audio.
-  let mix = null; // { nodes, share }
-  const muteSharedChk = $('muteSharedChk');
-  let muteShared = true;
-  try { muteShared = localStorage.getItem('muteShared') !== '0'; } catch (_) {}
-  muteSharedChk.checked = muteShared;
-  muteSharedChk.onchange = e => {
-    muteShared = e.target.checked;
-    try { localStorage.setItem('muteShared', muteShared ? '1' : '0'); } catch (_) {}
-  };
-
   function stopMixNodes() {
     if (mix) mix.nodes.forEach(n => { try { n.disconnect(); } catch (_) {} });
     mix = null;
@@ -1441,7 +1426,7 @@
     // Sharing this very tab is excluded for the same reason.
     const opts = {
       video: { frameRate: { ideal: 15 } },
-      audio: { suppressLocalAudioPlayback: muteShared, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: { suppressLocalAudioPlayback: false, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       selfBrowserSurface: 'exclude',
       systemAudio: 'exclude'
     };
