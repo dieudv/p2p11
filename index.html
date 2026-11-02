@@ -822,6 +822,23 @@
   if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', onNetChange);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') onNetChange(); });
 
+  window.addEventListener('pagehide', e => { if (!e.persisted) teardown(); });
+  window.addEventListener('beforeunload', e => {
+    if (inCall && startedAt) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  function teardown() {
+    if (!inCall) return;
+    inCall = false; stopRecovery();
+    sendCtl({ type: 'bye' });
+    try { pipWin && pipWin.close(); } catch (_) {}
+    try { call && call.close(); } catch (_) {}
+    try { peer && peer.destroy(); } catch (_) {}
+    stream && stream.getTracks().forEach(tr => tr.stop());
+    sharingStream && sharingStream.getTracks().forEach(tr => tr.stop());
+    try { wakeLock && wakeLock.release(); } catch (_) {}
+  }
+
   function doLeave() {
     clearInterval(statsTimer);
     try { pipWin && pipWin.close(); } catch (_) {}
