@@ -219,7 +219,7 @@
     <button class="btn" id="create" data-i18n="create"></button>
     <div class="or" data-i18n="or"></div>
     <div class="row">
-      <input id="code" autocomplete="off" maxlength="32" data-i18n-ph="codePh" data-i18n-aria="codePh">
+      <input id="roomCode" autocomplete="true" maxlength="32" data-i18n-ph="roomCode" data-i18n-aria="roomCode">
       <button class="btn" id="join" data-i18n="join"></button>
     </div>
     <p class="err" id="err" role="alert"></p>
@@ -361,7 +361,7 @@
   const STR = {
     vi: {
       sub: 'Kết nối trực tiếp giữa hai trình duyệt, không lưu video trên máy chủ.',
-      create: 'Tạo phòng mới', or: 'hoặc nhập mã phòng', codePh: 'Mã phòng', join: 'Vào phòng',
+      create: 'Tạo phòng mới', or: 'hoặc nhập mã phòng', roomCode: 'Mã phòng', join: 'Vào phòng',
       room: 'Phòng', copied: 'Đã sao chép',
       micOn: 'Tắt mic', micOff: 'Bật mic', camOn: 'Tắt camera', camOff: 'Bật camera', hang: 'Kết thúc',
       switchTo: 'English',
@@ -413,7 +413,7 @@
     },
     en: {
       sub: 'Direct connection between two browsers. No video is stored on any server.',
-      create: 'Create new room', or: 'or enter a room code', codePh: 'Room code', join: 'Join room',
+      create: 'Create new room', or: 'or enter a room code', roomCode: 'Room code', join: 'Join room',
       room: 'Room', copied: 'Copied',
       micOn: 'Mute', micOff: 'Unmute', camOn: 'Camera off', camOff: 'Camera on', hang: 'Hang up',
       switchTo: 'Tiếng Việt',
@@ -952,8 +952,8 @@
   }
 
   $('create').onclick = () => enter(makeCode());
-  $('join').onclick = () => enter($('code').value);
-  $('code').addEventListener('keydown', e => { if (e.key === 'Enter') enter($('code').value); });
+  $('join').onclick = () => enter($('roomCode').value);
+  $('roomCode').addEventListener('keydown', e => { if (e.key === 'Enter') enter($('roomCode').value); });
   $('hang').onclick = leave;
   toggle($('mic'), 'audio');
   toggle($('cam'), 'video');
@@ -2345,7 +2345,7 @@
 
   // Opened via a room link: prefill the code and wait for a click so the browser can ask for camera permission.
   const fromHash = clean(location.hash.slice(1));
-  if (fromHash) $('code').value = fromHash;
+  if (fromHash) $('roomCode').value = fromHash;
 
   render();
 })();
