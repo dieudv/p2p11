@@ -78,7 +78,8 @@
   .pill button { display: inline-flex; vertical-align: middle; align-items: center; }
   .pill button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .call.mirror #local { transform: scaleX(-1); }
-  .call.sharing #local { transform: none; }
+  .call.sharing #local,
+  .call.remote-share #local { transform: none; }
   .status { flex-wrap: wrap; }
   #timer { font-variant-numeric: tabular-nums; }
   .panel label.check { display: flex; align-items: center; gap: 10px; color: #fff; }
@@ -383,6 +384,10 @@
       ytError: 'Video này không phát được (có thể bị tắt nhúng hoặc bị chặn ở khu vực của bạn).',
       lblQuality: 'Chất lượng video gửi đi', qAuto: 'Tự động', qHigh: 'Cao (720p)', qMedium: 'Trung bình (480p)', qLow: 'Thấp (360p)', qSaver: 'Tiết kiệm dữ liệu (240p)',
       flipCam: 'Đổi camera trước/sau', flipFail: 'Không đổi được camera.', bigFlip: 'Lật video màn hình lớn',
+      shareAudioOn: 'Đang gửi âm thanh từ tab chia sẻ.',
+      shareAudioHint: 'Để chia sẻ âm thanh, hãy chọn một tab trình duyệt và bật tùy chọn chia sẻ âm thanh của tab.',
+      shareAudioFail: 'Không thể gửi âm thanh chia sẻ. Hãy thử chọn lại tab và bật chia sẻ âm thanh.',
+      shareFail: 'Không thể bắt đầu chia sẻ màn hình. Hãy thử lại.',
       inviteTitle: 'Đang chờ người kia vào', inviteSub: 'Gửi link này để mời họ vào phòng:', inviteLinkLbl: 'Link phòng', inviteShare: 'Chia sẻ', inviteCopy: 'Sao chép',
       react: 'Biểu tượng cảm xúc', handRaise: 'Giơ tay', handLower: 'Hạ tay', remoteHandUp: 'Người kia đã giơ tay', remoteHandDown: 'Người kia đã hạ tay',
       install: 'Cài đặt như ứng dụng', iosHint: 'Để cài trên iPhone/iPad: mở bằng Safari, bấm nút Chia sẻ rồi chọn “Thêm vào MH chính”.',
@@ -435,6 +440,10 @@
       ytError: 'This video cannot be played (embedding may be disabled, or it is blocked in your region).',
       lblQuality: 'Outgoing video quality', qAuto: 'Auto', qHigh: 'High (720p)', qMedium: 'Medium (480p)', qLow: 'Low (360p)', qSaver: 'Data saver (240p)',
       flipCam: 'Switch front/back camera', flipFail: 'Could not switch camera.', bigFlip: 'Flip main video',
+      shareAudioOn: 'Sharing audio from the selected tab.',
+      shareAudioHint: 'To share audio, choose a browser tab and enable its tab-audio option.',
+      shareAudioFail: 'Could not send shared audio. Try selecting the tab again and enabling tab audio.',
+      shareFail: 'Could not start screen sharing. Please try again.',
       inviteTitle: 'Waiting for the other person', inviteSub: 'Send them this link to join the room:', inviteLinkLbl: 'Room link', inviteShare: 'Share', inviteCopy: 'Copy',
       react: 'Reactions', handRaise: 'Raise hand', handLower: 'Lower hand', remoteHandUp: 'The other person raised their hand', remoteHandDown: 'The other person lowered their hand',
       install: 'Install as an app', iosHint: 'To install on iPhone/iPad: open in Safari, tap Share, then “Add to Home Screen”.',
@@ -568,7 +577,7 @@
   let stream, peer, call, room;
   let guestId = null, guestConn = null; // host side: the one person allowed in
   let statsTimer = null, prev = {}, info = null, devErrKey = null, sinkId = '';
-  let startedAt = null, timerId = null, audioCtx = null, soundOn = true;
+  let startedAt = null, timerId = null, audioCtx = null, soundOn = true, mix = null;
   let sharing = false, sharingStream = null, remoteShare = false, gateConn = null, swapped = false;
   let isHost = false, hostReady = false; // the invite card is only for the room's host, while waiting
   let myPassword = '', roomKeyP = Promise.resolve(null), guestAuth = null, authNonce = '', gateDone = false; // room password
@@ -1308,7 +1317,7 @@
     }
     pipLocal.style.display = tr ? 'block' : 'none';
     const rear = $('call').classList.contains('rear');
-    pipLocal.style.transform = mirrorOn && !sharing && !rear ? 'scaleX(-1)' : 'none';
+    pipLocal.style.transform = mirrorOn && !sharing && !remoteShare && !rear ? 'scaleX(-1)' : 'none';
     // flip of the "big" video: remote normally, your own video when swapped
     const bf = $('call').classList.contains('bigflip');
     remoteEl.style.scale = bf && !swapped ? '-1 1' : '';
@@ -1373,7 +1382,12 @@
   // ---------- Mirror view (display only, the stream sent to the other person is not changed) ----------
   let mirrorOn = true;
   try { mirrorOn = localStorage.getItem('mirror') !== '0'; } catch (_) {}
-  const applyMirror = () => { $('call').classList.toggle('mirror', mirrorOn); $('mirrorChk').checked = mirrorOn; pipMirrorStyle(); };
+  const applyMirror = () => {
+    const active = mirrorOn && !sharing && !remoteShare;
+    $('call').classList.toggle('mirror', active);
+    $('mirrorChk').checked = mirrorOn;
+    pipMirrorStyle();
+  };
   $('mirrorChk').onchange = e => {
     mirrorOn = e.target.checked;
     try { localStorage.setItem('mirror', mirrorOn ? '1' : '0'); } catch (_) {}
@@ -1403,6 +1417,7 @@
     if (d.type !== 'share') return;
     remoteShare = !!d.on;
     $('call').classList.toggle('remote-share', remoteShare);
+    applyMirror();
     pipMirrorStyle();
   }
   function updateShareButton() {
@@ -1416,6 +1431,7 @@
     $('moreBtn').setAttribute('aria-label', moreLabel);
     $('moreBtn').title = moreLabel;
     $('moreDot').hidden = !sharing;
+    applyMirror();
     updateInvite();
     updateYtState();
     updateTorch();
@@ -1444,14 +1460,19 @@
   }
   async function mixShareAudio(pc, ds) {
     const shareAudio = ds.getAudioTracks()[0];
-    if (!shareAudio) return; // no tab audio chosen in the browser's picker
+    if (!shareAudio) { showToast(t('shareAudioHint')); return; }
     const sender = pc.getSenders().find(x => x.track && x.track.kind === 'audio');
     const mixed = sender && startMix(stream.getAudioTracks()[0], shareAudio);
     try {
       if (!mixed) throw new Error('no mixer');
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
       await sender.replaceTrack(mixed);
       showToast(t('shareAudioOn'));
-    } catch (_) { stopMixNodes(); shareAudio.stop(); }
+    } catch (_) {
+      stopMixNodes();
+      shareAudio.stop();
+      showToast(t('shareAudioFail'));
+    }
   }
   function unmixShareAudio(pc) {
     if (!mix) return;
@@ -1478,9 +1499,18 @@
     try { ds = await navigator.mediaDevices.getDisplayMedia(opts); }
     catch (e) {
       if (e && (e.name === 'NotAllowedError' || e.name === 'AbortError')) return; // cancelled
-      // Browser does not understand these options (older Safari / Firefox): share the picture only.
-      try { ds = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: false }); }
-      catch (_) { return; }
+      // Older browsers may reject advanced options; retry with the standard audio request.
+      try { ds = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: true }); }
+      catch (fallbackError) {
+        if (fallbackError && (fallbackError.name === 'NotAllowedError' || fallbackError.name === 'AbortError')) return;
+        // Keep video sharing available where display audio capture is unsupported.
+        try { ds = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: false }); }
+        catch (videoError) {
+          if (videoError && (videoError.name === 'NotAllowedError' || videoError.name === 'AbortError')) return;
+          showToast(t('shareFail'));
+          return;
+        }
+      }
     }
     const track = ds.getVideoTracks()[0];
     const sender = pc.getSenders().find(x => x.track && x.track.kind === 'video');
@@ -1495,6 +1525,7 @@
     track.addEventListener('ended', () => stopShare(true)); // browser's own "Stop sharing" bar
     $('local').srcObject = ds;
     $('call').classList.add('sharing');
+    applyMirror();
     sendCtl({ type: 'share', on: true });
     updateShareButton();
   }
@@ -1511,6 +1542,7 @@
     unmixShareAudio(pc);
     $('local').srcObject = stream;
     $('call').classList.remove('sharing');
+    applyMirror();
     if (notify) sendCtl({ type: 'share', on: false });
     updateShareButton();
   }
