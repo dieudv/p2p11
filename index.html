@@ -77,9 +77,7 @@
   .ctl svg { width: 22px; height: 22px; display: block; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .pill button { display: inline-flex; vertical-align: middle; align-items: center; }
   .pill button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .call.mirror #local, .call.mirror #remote { transform: scaleX(-1); }
-  .call.mirror.in-pip #remote { transform: none; }
-  .call.mirror.remote-share #remote { transform: none; }
+  .call.mirror #local { transform: scaleX(-1); }
   .call.sharing #local { transform: none; }
   .status { flex-wrap: wrap; }
   #timer { font-variant-numeric: tabular-nums; }
@@ -1267,7 +1265,7 @@
       else if (remoteEl.webkitEnterFullscreen) remoteEl.webkitEnterFullscreen(); // iPhone: native video player
     } catch (_) {}
   };
-  const pipMirrorStyle = () => { if (pipWin) { remoteEl.style.transform = mirrorOn && !remoteShare ? 'scaleX(-1)' : 'none'; syncPipLocal(); } };
+  const pipMirrorStyle = () => { if (pipWin) { remoteEl.style.transform = 'none'; syncPipLocal(); } };
 
   // Keeps the small self-view in the floating window in step with the main one (source, mirror, camera off).
   function syncPipLocal() {
