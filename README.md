@@ -26,8 +26,8 @@ A 1-to-1 video calling app that runs entirely in the browser and connects peers 
 - Keeps the screen awake during a call (Screen Wake Lock), so phones and laptops don't dim or sleep mid-conversation
 - Emoji reactions (👍 👎 ❤️ 😂 😮 😢 👏 🎉) that float up over the video, and a raise-hand button that shows a ✋ badge on your video for the other person; only emojis from a fixed list are accepted from the other side
 - Speaking indicator and mic level: a small animated three-bar icon appears inside the video of whoever is talking (like Google Meet), and a level bar on the mic button shows your own volume (both are computed locally, nothing is sent)
-- Call timer, plus a short chime when the other person joins and a lower one when they leave (can be turned off in the Devices panel)
-- Mirror view for both your own video and the other person's video (display only, can be turned off in the Devices panel); your own preview shows the full camera frame without cropping
+- Call timer with a short chime when the other person joins and a lower one when they leave; microphone noise suppression, echo cancellation and automatic gain control are enabled by default
+- Camera video is mirrored by default for your own preview; shared screen content stays unmirrored so text remains readable. Your preview shows the full camera frame without cropping
 - Built-in connection info panel: connection path (LAN / direct / TURN), latency, resolution, frame rate, bitrate and packet loss
 - Light/dark theme that follows the system setting, works on mobile
 - Bilingual Vietnamese/English interface, chosen from the browser language with a language switch button
