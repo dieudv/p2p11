@@ -579,7 +579,7 @@
   let statsTimer = null, prev = {}, info = null, devErrKey = null, sinkId = '';
   let startedAt = null, timerId = null, audioCtx = null, mix = null;
   const soundOn = true;
-  let sharing = false, sharingStream = null, remoteShare = false, gateConn = null, swapped = false;
+  let sharing = false, sharingStream = null, shareComposite = null, remoteShare = false, gateConn = null, swapped = false;
   let isHost = false, hostReady = false; // the invite card is only for the room's host, while waiting
   let myPassword = '', roomKeyP = Promise.resolve(null), guestAuth = null, authNonce = '', gateDone = false; // room password
   let failCount = 0, lockUntil = 0, lockLevel = 0;
@@ -882,6 +882,7 @@
     try { peer && peer.destroy(); } catch (_) {}
     stream && stream.getTracks().forEach(tr => tr.stop());
     sharingStream && sharingStream.getTracks().forEach(tr => tr.stop());
+    stopShareComposite();
     try { wakeLock && wakeLock.release(); } catch (_) {}
   }
 
@@ -889,6 +890,7 @@
     clearInterval(statsTimer);
     try { pipWin && pipWin.close(); } catch (_) {}
     sharingStream && sharingStream.getTracks().forEach(x => x.stop());
+    stopShareComposite();
     inCall = false;
     startedAt = null;
     clearInterval(timerId);
@@ -933,6 +935,7 @@
         stream.removeTrack(old);
       }
       if (sender && !sharing) { try { await sender.replaceTrack(getBlack()); } catch (_) {} }
+      if (sharing) await updateShareVideo();
       updateRear();
       return true;
     }
@@ -949,6 +952,7 @@
     stream.addTrack(nt);
     updateRear();
     if (sender && !sharing) { try { await sender.replaceTrack(nt); } catch (_) {} }
+    if (sharing) await updateShareVideo();
     applyQuality();
     if (!sharing) { $('local').srcObject = null; $('local').srcObject = stream; }
     loadDevices();
@@ -1031,8 +1035,11 @@
         const mixed = startMix(nt, mix.share);
         if (sender && mixed) { try { await sender.replaceTrack(mixed); } catch (_) {} }
       } else if (sender && !(sharing && kind === 'video')) { try { await sender.replaceTrack(nt); } catch (_) {} }
+      if (kind === 'video' && sharing) await updateShareVideo();
       $('local').srcObject = null;
-      $('local').srcObject = sharingStream || stream;
+      $('local').srcObject = sharing ? (shareComposite ? shareComposite.stream : sharingStream) : stream;
+    } else if (kind === 'video' && sharing) {
+      await updateShareVideo();
     }
     render();
     return !!ns && !devErrKey;
@@ -1383,7 +1390,7 @@
   applyMirror();
 
   // ---------- Screen sharing ----------
-  // The screen track replaces the camera track on the existing connection (no renegotiation).
+  // The screen or its camera composite replaces the existing video track (no renegotiation).
   // The other side is told over the data channel so it can switch off its mirror effect,
   // otherwise shared text would read backwards.
   const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
@@ -1453,6 +1460,12 @@
       if (!mixed) throw new Error('no mixer');
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       await sender.replaceTrack(mixed);
+      if (!sharing || shareAudio.readyState === 'ended') {
+        const mic = stream && stream.getAudioTracks()[0];
+        if (mic) await sender.replaceTrack(mic);
+        stopMixNodes();
+        return;
+      }
       showToast(t('shareAudioOn'));
     } catch (_) {
       stopMixNodes();
@@ -1466,6 +1479,171 @@
     const sender = pc && pc.getSenders().find(x => x.track && x.track.kind === 'audio');
     if (sender && mic) sender.replaceTrack(mic).catch(() => {});
     stopMixNodes();
+  }
+
+  async function createShareComposite(displayTrack) {
+    if (!HTMLCanvasElement.prototype.captureStream) throw new Error('Canvas capture is unavailable');
+    const settings = displayTrack.getSettings();
+    const width = settings.width || 1280, height = settings.height || 720;
+    const scale = Math.min(1, 1920 / width, 1080 / height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(width * scale));
+    canvas.height = Math.max(2, Math.round(height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas context is unavailable');
+
+    const output = canvas.captureStream(15);
+    const outputTrack = output.getVideoTracks()[0];
+    if (!outputTrack) {
+      output.getTracks().forEach(tr => tr.stop());
+      throw new Error('Canvas video track is unavailable');
+    }
+
+    const displayVideo = document.createElement('video');
+    displayVideo.muted = true;
+    displayVideo.playsInline = true;
+    displayVideo.srcObject = new MediaStream([displayTrack]);
+    try { await displayVideo.play(); }
+    catch (e) {
+      displayVideo.pause();
+      displayVideo.srcObject = null;
+      output.getTracks().forEach(tr => tr.stop());
+      throw e;
+    }
+
+    const cameraVideo = document.createElement('video');
+    cameraVideo.muted = true;
+    cameraVideo.playsInline = true;
+    let cameraTrack = null, drawTimer = null, stopped = false;
+
+    const draw = () => {
+      if (stopped) return;
+      if (displayVideo.readyState < 2) return;
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(displayVideo, 0, 0, canvas.width, canvas.height);
+
+      const currentCamera = stream && stream.getVideoTracks().find(tr => tr.readyState === 'live') || null;
+      if (currentCamera !== cameraTrack) {
+        cameraTrack = currentCamera;
+        cameraVideo.pause();
+        cameraVideo.srcObject = cameraTrack ? new MediaStream([cameraTrack]) : null;
+        if (cameraTrack) cameraVideo.play().catch(e => console.warn('shareCamera', e));
+      }
+      if (!cameraTrack || cameraVideo.readyState < 2) return;
+
+      const maxWidth = Math.min(canvas.width * 0.28, 360);
+      const aspect = cameraVideo.videoWidth / cameraVideo.videoHeight || 4 / 3;
+      const tileWidth = Math.min(maxWidth, canvas.height * 0.3 * aspect);
+      const tileHeight = tileWidth / aspect;
+      const inset = Math.max(12, canvas.width * 0.025);
+      const x = canvas.width - tileWidth - inset;
+      const y = canvas.height - tileHeight - inset;
+      const radius = Math.min(tileWidth, tileHeight) * 0.06;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.arcTo(x + tileWidth, y, x + tileWidth, y + tileHeight, radius);
+      ctx.arcTo(x + tileWidth, y + tileHeight, x, y + tileHeight, radius);
+      ctx.arcTo(x, y + tileHeight, x, y, radius);
+      ctx.arcTo(x, y, x + tileWidth, y, radius);
+      ctx.closePath();
+      ctx.clip();
+      const sourceAspect = cameraVideo.videoWidth / cameraVideo.videoHeight;
+      let sx = 0, sy = 0, sw = cameraVideo.videoWidth, sh = cameraVideo.videoHeight;
+      if (sourceAspect > aspect) {
+        sw = sh * aspect;
+        sx = (cameraVideo.videoWidth - sw) / 2;
+      } else {
+        sh = sw / aspect;
+        sy = (cameraVideo.videoHeight - sh) / 2;
+      }
+      ctx.drawImage(cameraVideo, sx, sy, sw, sh, x, y, tileWidth, tileHeight);
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(255,255,255,.9)';
+      ctx.lineWidth = Math.max(2, canvas.width * 0.002);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.arcTo(x + tileWidth, y, x + tileWidth, y + tileHeight, radius);
+      ctx.arcTo(x + tileWidth, y + tileHeight, x, y + tileHeight, radius);
+      ctx.arcTo(x, y + tileHeight, x, y, radius);
+      ctx.arcTo(x, y, x + tileWidth, y, radius);
+      ctx.closePath();
+      ctx.stroke();
+    };
+    drawTimer = setInterval(draw, 1000 / 15);
+
+    return {
+      stream: output,
+      track: outputTrack,
+      stop() {
+        stopped = true;
+        clearInterval(drawTimer);
+        displayVideo.pause();
+        displayVideo.srcObject = null;
+        cameraVideo.pause();
+        cameraVideo.srcObject = null;
+        output.getTracks().forEach(tr => tr.stop());
+      }
+    };
+  }
+  function stopShareComposite() {
+    if (!shareComposite) return;
+    shareComposite.stop();
+    shareComposite = null;
+  }
+
+  let shareVideoRevision = 0;
+  async function updateShareVideo() {
+    const ds = sharingStream;
+    const displayTrack = ds && ds.getVideoTracks()[0];
+    const pc = call && call.peerConnection;
+    const sender = pc && pc.getSenders().find(x => x.track && x.track.kind === 'video');
+    if (!sharing || !ds || !displayTrack || !sender) return false;
+
+    const revision = ++shareVideoRevision;
+    const camera = stream && stream.getVideoTracks().find(tr => tr.readyState === 'live' && tr.enabled);
+    let composite = null;
+    if (camera) {
+      try { composite = await createShareComposite(displayTrack); }
+      catch (e) {
+        console.warn('shareComposite', e);
+        showToast(t('shareFail'));
+        return false;
+      }
+    }
+    const nextTrack = composite ? composite.track : displayTrack;
+    try { nextTrack.contentHint = 'detail'; } catch (_) {}
+    if (!sharing || sharingStream !== ds || revision !== shareVideoRevision) {
+      if (composite) composite.stop();
+      return false;
+    }
+
+    const previous = shareComposite;
+    try { await sender.replaceTrack(nextTrack); }
+    catch (e) {
+      if (composite) composite.stop();
+      if (!camera) {
+        shareComposite = null;
+        $('local').srcObject = ds;
+        if (previous) previous.stop();
+      }
+      console.warn('shareTrack', e);
+      showToast(t('shareFail'));
+      return false;
+    }
+    if (!sharing || sharingStream !== ds || revision !== shareVideoRevision) {
+      if (composite) composite.stop();
+      return false;
+    }
+
+    shareComposite = composite;
+    $('local').srcObject = composite ? composite.stream : ds;
+    if (previous && previous !== composite) previous.stop();
+    applyQuality();
+    return true;
   }
 
   async function startShare() {
@@ -1501,15 +1679,15 @@
     const track = ds.getVideoTracks()[0];
     const sender = pc.getSenders().find(x => x.track && x.track.kind === 'video');
     if (!track || !sender) { ds.getTracks().forEach(x => x.stop()); return; }
-    try { track.contentHint = 'detail'; } catch (_) {} // favor sharp text over frame rate
-    try { await sender.replaceTrack(track); }
-    catch (_) { ds.getTracks().forEach(x => x.stop()); return; }
+    try { track.contentHint = 'detail'; } catch (_) {}
     sharing = true; sharingStream = ds;
+    track.addEventListener('ended', () => stopShare(true));
+    if (track.readyState === 'ended') { stopShare(true); return; }
+    if (!await updateShareVideo()) { stopShare(false); return; }
     setTorch(false);
     applyQuality();
     await mixShareAudio(pc, ds);
-    track.addEventListener('ended', () => stopShare(true)); // browser's own "Stop sharing" bar
-    $('local').srcObject = ds;
+    if (!sharing || sharingStream !== ds) return;
     $('call').classList.add('sharing');
     applyMirror();
     sendCtl({ type: 'share', on: true });
@@ -1519,8 +1697,10 @@
   function stopShare(notify) {
     if (!sharing) return;
     sharing = false;
+    shareVideoRevision++;
     const ds = sharingStream; sharingStream = null;
     if (ds) ds.getTracks().forEach(x => x.stop());
+    stopShareComposite();
     const cam = stream && stream.getVideoTracks()[0];
     const pc = call && call.peerConnection;
     const sender = pc && pc.getSenders().find(x => x.track && x.track.kind === 'video');
