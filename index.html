@@ -206,7 +206,7 @@
   .bigflip-btn[aria-pressed="true"] { background: #fff; color: #111; }
   .bigflip-btn:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   .bigflip-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .call.bigflip:not(.swap) #remote, .call.bigflip.swap #local { scale: -1 1; } /* composes with the mirror transform */
+  .call.flip-remote #remote, .call.flip-local #local { scale: -1 1; }
 </style>
 </head>
 <body>
@@ -1314,8 +1314,8 @@
     pipLocal.style.transform = mirrorOn && !sharing && !remoteShare && !rear ? 'scaleX(-1)' : 'none';
     // flip of the "big" video: remote normally, your own video when swapped
     const bf = $('call').classList.contains('bigflip');
-    remoteEl.style.scale = bf && !swapped ? '-1 1' : '';
-    pipLocal.style.scale = bf && swapped ? '-1 1' : '';
+    remoteEl.style.scale = flips.remote ? '-1 1' : '';
+    pipLocal.style.scale = flips.local ? '-1 1' : '';
   }
   setInterval(syncPipLocal, 300); // not tied to tickMeters, which pauses while the main tab is hidden
   // Moves the existing <video> into a small floating window. The browser just composites the same
@@ -2028,14 +2028,30 @@
   // ---------- Swap the two videos ----------
   function setSwap(on) {
     const was = swapped;
-    swapped = !!on && !!startedAt; // only while connected
+    swapped = !!on && !!startedAt;
     $('call').classList.toggle('swap', swapped);
-    if (was && !swapped) setZoom(null); // back to normal: reset the camera zoom
+    if (was && !swapped) setZoom(null);
     updateViewButtons();
+    applyFlips();            // + thêm dòng này
   }
 
+  const flips = { local: false, remote: false };
+  try {
+    flips.local = localStorage.getItem('flipLocal') === '1';
+    flips.remote = localStorage.getItem('flipRemote') === '1';
+  } catch (_) {}
+  function applyFlips() {
+    $('call').classList.toggle('flip-local', flips.local);
+    $('call').classList.toggle('flip-remote', flips.remote);
+    // nút phản ánh trạng thái của video đang ở màn hình lớn
+    $('bigFlipBtn').setAttribute('aria-pressed', swapped ? flips.local : flips.remote);
+    syncPipLocal();
+  }
   $('bigFlipBtn').onclick = () => {
-    $('bigFlipBtn').setAttribute('aria-pressed', $('call').classList.toggle('bigflip'));
+    const k = swapped ? 'local' : 'remote';
+    flips[k] = !flips[k];
+    try { localStorage.setItem(k === 'local' ? 'flipLocal' : 'flipRemote', flips[k] ? '1' : '0'); } catch (_) {}
+    applyFlips();
   };
 
   // ---------- Camera zoom (only while your own video is the big one) ----------
@@ -2374,6 +2390,7 @@
   const fromHash = clean(location.hash.slice(1));
   if (fromHash) $('roomCode').value = fromHash;
 
+  applyFlips();
   render();
 })();
 </script>
