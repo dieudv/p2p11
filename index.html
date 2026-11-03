@@ -530,6 +530,10 @@
     updateViewButtons();
     updateShareButton();
     updateQualityLabels();
+    ['ytBtn', 'devBtn', 'infoBtn'].forEach(id => { // their label is the text of the last span, set by data-i18n above
+      const b = $(id);
+      b.title = b.lastElementChild.textContent + keyOf(id);
+    });
   }
 
   $('lang').onclick = () => {
@@ -1745,6 +1749,7 @@
     $('handBtn').disabled = !on && !myHand;
     $('handBtn').setAttribute('aria-pressed', myHand);
     $('handLabel').textContent = t(myHand ? 'handLower' : 'handRaise');
+    $('handBtn').title = t(myHand ? 'handLower' : 'handRaise') + keyOf('handBtn');
     $('handDot').hidden = !myHand;
     $('handLocal').classList.toggle('on', myHand);
   }
