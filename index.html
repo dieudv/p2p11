@@ -484,6 +484,11 @@
   
   };
   const ico = name => '<svg viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
+
+  // Keyboard shortcuts: letter -> id of the button that is clicked
+  const SHORTCUTS = { m: 'mic', v: 'cam', c: 'chatBtn', r: 'reactBtn', h: 'handBtn', s: 'shareBtn', y: 'ytBtn', p: 'pipBtn', f: 'fsBtn', d: 'devBtn', i: 'infoBtn' };
+  const keyOf = id => { const k = Object.keys(SHORTCUTS).find(x => SHORTCUTS[x] === id); return k ? ' (' + k.toUpperCase() + ')' : ''; };
+
   function setLabeled(btn, iconName, label) {
     btn.innerHTML = ico(iconName);
     if (btn.closest('.menu')) { // items inside the More menu show their name next to the icon
@@ -492,7 +497,7 @@
       btn.append(span);
     }
     btn.setAttribute('aria-label', label);
-    btn.title = label;
+    btn.title = label + keyOf(btn.id);
   }
 
   let statusKey = null, statusRaw = '';
@@ -510,7 +515,7 @@
     document.querySelectorAll('[data-i18n-label]').forEach(el => {
       const l = t(el.dataset.i18nLabel);
       el.setAttribute('aria-label', l);
-      el.title = l;
+      el.title = l + keyOf(el.id);
     });
     const micOff = $('mic').getAttribute('aria-pressed') === 'true';
     const camOff = $('cam').getAttribute('aria-pressed') === 'true';
@@ -2345,6 +2350,19 @@
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') { keepAwake(); if (inCall) ensureMedia(); }
+  });
+
+  // ---------- Keyboard shortcuts ----------
+  // Active only during a call, never while typing, and never with Ctrl/Alt/Cmd so browser shortcuts keep working.
+  for (const [k, id] of Object.entries(SHORTCUTS)) $(id).setAttribute('aria-keyshortcuts', k.toUpperCase());
+  document.addEventListener('keydown', e => {
+    if (!inCall || e.repeat || e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    const letter = e.code && e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : '';
+    const b = $(SHORTCUTS[letter] || '');
+    if (!b || b.disabled || b.style.display === 'none') return;
+    e.preventDefault();
+    b.click();
   });
 
   // Opened via a room link: prefill the code and wait for a click so the browser can ask for camera permission.
