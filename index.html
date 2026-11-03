@@ -565,7 +565,7 @@
   }
   const PEER_OPTS = { config: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 2, sdpSemantics: 'unified-plan' } };
 
-  let stream, peer, call, room;
+  let stream, peer, call, room, entering = false;
   let guestId = null, guestConn = null; // host side: the one person allowed in
   let statsTimer = null, prev = {}, info = null, devErrKey = null, sinkId = '';
   let startedAt = null, timerId = null, audioCtx = null, mix = null;
@@ -586,16 +586,20 @@
   const audioConstraints = () => ({ ...micFx });
 
   async function enter(code) {
+    if (entering || inCall) return;
     room = clean(code);
     if (!room) return showErr('needCode');
     showErr(null);
     myPassword = $('roomPw').value.slice(0, 64);
     if (myPassword && !(window.crypto && crypto.subtle)) return showErr('pwNoCrypto');
+    entering = true;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: audioConstraints() });
     } catch (e) {
+      entering = false;
       return showErr('noMedia');
     }
+    entering = false;
     location.hash = room;
     loadDevices();
     inCall = true;
@@ -704,16 +708,22 @@
   function bind(c) {
     hostTries = 0; missTries = 0;
     call = c; prev = {}; byeSeen = false;
-    setTimeout(() => { if (call === c && !startedAt) setStatus('connectSlow'); }, 20000);
+    setTimeout(() => {
+      if (call === c && !startedAt && inCall && !linkLost()) setStatus('connectSlow');
+    }, 20000);
     watchPc(c);
     c.on('stream', s => { $('remote').srcObject = s; if (!recovering) setStatus('connected'); startTimer(); setRemoteMeter(s); });
     c.on('close', () => {
       if (call !== c) return;
-      if (startedAt && !byeSeen && linkLost()) return;
+      if (!byeSeen && linkLost()) return;
       peerGone();
       if (!isHost && byeSeen) setTimeout(takeOver, 1500); // host hung up: take over the room
     });
-    c.on('error', e => { if (call !== c || (startedAt && !byeSeen)) return; fail(e); });
+    c.on('error', e => {
+      if (call !== c || (startedAt && !byeSeen)) return;
+      if (!byeSeen && linkLost()) return;
+      fail(e);
+    });
   }
 
   function fail(err) {
@@ -766,7 +776,7 @@
       if (call !== c) return;
       const s = pc.connectionState || pc.iceConnectionState;
       if (s === 'connected' || s === 'completed') { if (again) { again = false; restored(); } }
-      else if (s === 'failed') { if (startedAt) linkLost(); }
+      else if (s === 'failed') { if (!byeSeen) linkLost(); }
       else if (s === 'disconnected') tm = setTimeout(() => {
         const n = pc.connectionState || pc.iceConnectionState;
         if (call === c && startedAt && n !== 'connected' && n !== 'completed') linkLost();
