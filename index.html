@@ -51,6 +51,8 @@
   .call { display: none; position: fixed; inset: 0; background: var(--stage); }
   .call.on { display: block; }
   #remote { width: 100%; height: 100%; object-fit: contain; background: var(--stage); }
+  .call.remote-camera-positionable #remote { cursor: grab; touch-action: none; }
+  .call.remote-camera-dragging #remote { cursor: grabbing; }
   #local { display: block; width: 100%; height: auto; max-height: 40vh; object-fit: contain; border-radius: 12px; border: 2px solid rgba(255,255,255,.25); background: #000; }
   .status { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; gap: 10px; align-items: center; justify-content: space-between; color: #fff; }
   .pill { background: rgba(0,0,0,.55); padding: 8px 14px; border-radius: 999px; font-size: .92rem; }
@@ -579,7 +581,8 @@
   let statsTimer = null, prev = {}, info = null, devErrKey = null, sinkId = '';
   let startedAt = null, timerId = null, audioCtx = null, mix = null;
   const soundOn = true;
-  let sharing = false, sharingStream = null, shareComposite = null, remoteShare = false, gateConn = null, swapped = false;
+  let sharing = false, sharingStream = null, shareComposite = null, shareCameraPosition = null, shareCameraLayout = null;
+  let remoteShare = false, remoteCameraLayout = null, remoteCameraDrag = null, remoteCameraPending = null, remoteCameraTimer = null, remoteCameraLastSent = 0, swapped = false;
   let isHost = false, hostReady = false; // the invite card is only for the room's host, while waiting
   let myPassword = '', roomKeyP = Promise.resolve(null), guestAuth = null, authNonce = '', gateDone = false; // room password
   let failCount = 0, lockUntil = 0, lockLevel = 0;
@@ -1408,12 +1411,121 @@
     if (d.type === 'yt') return onYt(d);
     if (d.type === 'react') return onReact(d);
     if (d.type === 'hand') return onHand(d);
+    if (d.type === 'camera-position') {
+      if (!sharing || !Number.isFinite(d.x) || !Number.isFinite(d.y)) return;
+      const layout = shareCameraLayout;
+      const maxX = layout ? 1 - layout.w : 1, maxY = layout ? 1 - layout.h : 1;
+      shareCameraPosition = { x: Math.max(0, Math.min(maxX, d.x)), y: Math.max(0, Math.min(maxY, d.y)) };
+      if (layout) {
+        shareCameraLayout = { ...layout, ...shareCameraPosition };
+        sendCtl({ type: 'camera-layout', active: true, ...shareCameraLayout });
+      }
+      return;
+    }
+    if (d.type === 'camera-layout') {
+      if (d.active !== true || ![d.x, d.y, d.w, d.h].every(Number.isFinite) ||
+          d.w <= 0 || d.h <= 0 || d.w > 1 || d.h > 1) {
+        remoteCameraLayout = null;
+        remoteCameraDrag = null;
+      } else {
+        const w = d.w, h = d.h;
+        remoteCameraLayout = {
+          x: Math.max(0, Math.min(1 - w, d.x)),
+          y: Math.max(0, Math.min(1 - h, d.y)),
+          w, h
+        };
+      }
+      updateRemoteCameraDragUI();
+      return;
+    }
     if (d.type !== 'share') return;
     remoteShare = !!d.on;
+    if (!remoteShare) {
+      remoteCameraLayout = null;
+      remoteCameraDrag = null;
+      clearTimeout(remoteCameraTimer);
+      remoteCameraTimer = null;
+      remoteCameraPending = null;
+      updateRemoteCameraDragUI();
+    }
     $('call').classList.toggle('remote-share', remoteShare);
+    updateRemoteCameraDragUI();
     applyMirror();
     pipMirrorStyle();
   }
+  function updateRemoteCameraDragUI() {
+    const active = remoteShare && !!remoteCameraLayout;
+    $('call').classList.toggle('remote-camera-positionable', active);
+    if (!active) $('call').classList.remove('remote-camera-dragging');
+  }
+  function remoteVideoPoint(clientX, clientY) {
+    const rect = remoteEl.getBoundingClientRect();
+    const width = remoteEl.videoWidth, height = remoteEl.videoHeight;
+    if (!width || !height) return null;
+    const scale = Math.min(rect.width / width, rect.height / height);
+    const drawnWidth = width * scale, drawnHeight = height * scale;
+    const left = rect.left + (rect.width - drawnWidth) / 2;
+    const top = rect.top + (rect.height - drawnHeight) / 2;
+    let x = Math.max(0, Math.min(1, (clientX - left) / drawnWidth));
+    const y = Math.max(0, Math.min(1, (clientY - top) / drawnHeight));
+    if ($('call').classList.contains('flip-remote')) x = 1 - x;
+    return { x, y };
+  }
+  function sendRemoteCameraPosition(position, immediate = false) {
+    remoteCameraPending = position;
+    if (immediate) {
+      clearTimeout(remoteCameraTimer);
+      remoteCameraTimer = null;
+      remoteCameraPending = null;
+      remoteCameraLastSent = Date.now();
+      sendCtl({ type: 'camera-position', x: position.x, y: position.y });
+      return;
+    }
+    if (remoteCameraTimer) return;
+    const delay = Math.max(0, 50 - (Date.now() - remoteCameraLastSent));
+    remoteCameraTimer = setTimeout(() => {
+      remoteCameraTimer = null;
+      if (!remoteCameraPending) return;
+      const next = remoteCameraPending;
+      remoteCameraPending = null;
+      remoteCameraLastSent = Date.now();
+      sendCtl({ type: 'camera-position', x: next.x, y: next.y });
+    }, delay);
+  }
+  remoteEl.addEventListener('pointerdown', e => {
+    if (!remoteShare || !remoteCameraLayout || remoteCameraDrag || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const point = remoteVideoPoint(e.clientX, e.clientY);
+    const layout = remoteCameraLayout;
+    if (!point || point.x < layout.x || point.x > layout.x + layout.w || point.y < layout.y || point.y > layout.y + layout.h) return;
+    e.preventDefault();
+    remoteCameraDrag = { pointerId: e.pointerId, offsetX: point.x - layout.x, offsetY: point.y - layout.y, moved: false };
+    $('call').classList.add('remote-camera-dragging');
+    try { remoteEl.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  remoteEl.addEventListener('pointermove', e => {
+    if (!remoteCameraDrag || remoteCameraDrag.pointerId !== e.pointerId || !remoteCameraLayout) return;
+    const point = remoteVideoPoint(e.clientX, e.clientY);
+    if (!point) return;
+    const layout = remoteCameraLayout;
+    const x = Math.max(0, Math.min(1 - layout.w, point.x - remoteCameraDrag.offsetX));
+    const y = Math.max(0, Math.min(1 - layout.h, point.y - remoteCameraDrag.offsetY));
+    if (Math.abs(x - layout.x) + Math.abs(y - layout.y) < 0.001) return;
+    remoteCameraDrag.moved = true;
+    remoteCameraLayout = { ...layout, x, y };
+    sendRemoteCameraPosition({ x, y });
+  });
+  const endRemoteCameraDrag = e => {
+    if (!remoteCameraDrag || remoteCameraDrag.pointerId !== e.pointerId) return;
+    const drag = remoteCameraDrag;
+    remoteCameraDrag = null;
+    $('call').classList.remove('remote-camera-dragging');
+    if (e.type === 'pointerup' && drag.moved && remoteCameraLayout) {
+      remoteEl._cameraDragClick = true;
+      sendRemoteCameraPosition(remoteCameraLayout, true);
+    }
+  };
+  remoteEl.addEventListener('pointerup', endRemoteCameraDrag);
+  remoteEl.addEventListener('pointercancel', endRemoteCameraDrag);
   function updateShareButton() {
     setLabeled($('shareBtn'), 'screen', t(sharing ? 'shareStop' : 'share'));
     $('shareBtn').setAttribute('aria-pressed', sharing);
@@ -1538,8 +1650,21 @@
       const tileWidth = Math.min(maxWidth, canvas.height * 0.3 * aspect);
       const tileHeight = tileWidth / aspect;
       const inset = Math.max(12, canvas.width * 0.025);
-      const x = canvas.width - tileWidth - inset;
-      const y = canvas.height - tileHeight - inset;
+      const tileW = tileWidth / canvas.width, tileH = tileHeight / canvas.height;
+      if (!shareCameraPosition) {
+        shareCameraPosition = { x: 1 - tileW - inset / canvas.width, y: 1 - tileH - inset / canvas.height };
+      }
+      const position = {
+        x: Math.max(0, Math.min(1 - tileW, shareCameraPosition.x)),
+        y: Math.max(0, Math.min(1 - tileH, shareCameraPosition.y))
+      };
+      shareCameraPosition = position;
+      const x = position.x * canvas.width;
+      const y = position.y * canvas.height;
+      if (!shareCameraLayout || Math.abs(shareCameraLayout.w - tileW) > 0.001 || Math.abs(shareCameraLayout.h - tileH) > 0.001) {
+        sendCtl({ type: 'camera-layout', active: true, x: position.x, y: position.y, w: tileW, h: tileH });
+      }
+      shareCameraLayout = { ...position, w: tileW, h: tileH };
       const radius = Math.min(tileWidth, tileHeight) * 0.06;
 
       ctx.save();
@@ -1642,6 +1767,10 @@
     shareComposite = composite;
     $('local').srcObject = composite ? composite.stream : ds;
     if (previous && previous !== composite) previous.stop();
+    if (!composite) {
+      shareCameraLayout = null;
+      sendCtl({ type: 'camera-layout', active: false });
+    }
     applyQuality();
     return true;
   }
@@ -1680,6 +1809,8 @@
     const sender = pc.getSenders().find(x => x.track && x.track.kind === 'video');
     if (!track || !sender) { ds.getTracks().forEach(x => x.stop()); return; }
     try { track.contentHint = 'detail'; } catch (_) {}
+    shareCameraPosition = null;
+    shareCameraLayout = null;
     sharing = true; sharingStream = ds;
     track.addEventListener('ended', () => stopShare(true));
     if (track.readyState === 'ended') { stopShare(true); return; }
@@ -1698,6 +1829,9 @@
     if (!sharing) return;
     sharing = false;
     shareVideoRevision++;
+    sendCtl({ type: 'camera-layout', active: false });
+    shareCameraLayout = null;
+    shareCameraPosition = null;
     const ds = sharingStream; sharingStream = null;
     if (ds) ds.getTracks().forEach(x => x.stop());
     stopShareComposite();
@@ -2290,7 +2424,10 @@
   $('localBox').addEventListener('keydown', e => {
     if (e.target === $('localBox') && (e.key === 'Enter' || e.key === ' ') && !swapped && startedAt) { e.preventDefault(); setSwap(true); }
   });
-  remoteEl.addEventListener('click', () => { if (swapped) setSwap(false); });
+  remoteEl.addEventListener('click', () => {
+    if (remoteEl._cameraDragClick) { remoteEl._cameraDragClick = false; return; }
+    if (swapped) setSwap(false);
+  });
 
   // Resizing keeps the picture's proportions. A video box is anchored by the corner opposite to its grip.
   // limits(callWidth) returns [min, max] width in px.
