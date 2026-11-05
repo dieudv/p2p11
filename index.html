@@ -720,10 +720,24 @@
   function bind(c) {
     hostTries = 0; missTries = 0;
     call = c; prev = {}; byeSeen = false;
-    setTimeout(() => {
-      if (call === c && !startedAt && inCall && !linkLost()) setStatus('connectSlow');
+    setTimeout(async () => {
+      if (call !== c || !inCall || recovering) return;
+      let got = 0;
+      try { (await c.peerConnection.getStats()).forEach(r => { if (r.type === 'inbound-rtp') got += r.bytesReceived; }); } catch (_) {}
+      if (!startedAt || !got) { if (!linkLost()) setStatus('connectSlow'); }
     }, 20000);
     watchPc(c);
+
+    const pc0 = c.peerConnection;
+    if (pc0) pc0.addEventListener('track', e => {
+      if (call !== c || !e.streams[0]) return;
+      const s = e.streams[0], r = $('remote');
+      if (r.srcObject !== s) { r.srcObject = s; setRemoteMeter(s); }
+      r.play().catch(() => {});
+      if (!recovering) setStatus('connected');
+      startTimer();
+    });
+
     c.on('stream', s => { $('remote').srcObject = s; if (!recovering) setStatus('connected'); startTimer(); setRemoteMeter(s); });
     c.on('close', () => {
       if (call !== c) return;
@@ -1399,6 +1413,8 @@
   const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
   if (!canShare) $('shareBtn').style.display = 'none';
 
+  const ctlOpen = () => { const c = guestConn || gateConn; return !!(c && c.open); };
+
   function sendCtl(msg) {
     const c = guestConn || gateConn;
     try { if (c && c.open) { c.send(msg); return true; } } catch (_) {}
@@ -1970,7 +1986,7 @@
     $('chatBadge').textContent = unread > 9 ? '9+' : String(unread);
   }
   function updateChatState() {
-    const on = !!startedAt; // needs a connected call
+    const on = !!startedAt || ctlOpen();
     $('chatInput').disabled = !on;
     $('chatSend').disabled = !on;
   }
@@ -2007,7 +2023,7 @@
   function sendChat() {
     const input = $('chatInput');
     const text = input.value.trim().slice(0, CHAT_MAX);
-    if (!text || !startedAt) return;
+    if (!text || !(startedAt || ctlOpen())) return;
     if (sendCtl({ type: 'chat', text })) { addMsg(text, true); input.value = ''; }
   }
   $('chatSend').onclick = sendChat;
@@ -2045,7 +2061,7 @@
     $('call').append(el);
   }
   function sendReaction(emoji) {
-    if (!startedAt || !EMOJIS.includes(emoji)) return;
+    if (!(startedAt || ctlOpen()) || !EMOJIS.includes(emoji)) return;
     if (sendCtl({ type: 'react', emoji })) flyEmoji(emoji, true);
   }
   function onReact(d) {
@@ -2058,7 +2074,7 @@
   }
 
   function updateReactUI() {
-    const on = !!startedAt; // needs a connected call
+    const on = !!startedAt || ctlOpen();
     document.querySelectorAll('#emojis .emo').forEach(b => { b.disabled = !on; });
     $('handBtn').disabled = !on && !myHand;
     $('handBtn').setAttribute('aria-pressed', myHand);
@@ -2514,6 +2530,7 @@
   function admit(conn, hp) {
     guestId = conn.peer; guestConn = conn;
     conn.send(hp ? { type: 'welcome', hp } : { type: 'welcome' });
+    updateShareButton();
     setTimeout(() => {
       if (guestConn === conn && !call && !startedAt && !recovering) {
         guestId = null; guestConn = null; try { conn.close(); } catch (_) {}
@@ -2586,6 +2603,7 @@
         return;
       }
       gateDone = true; hidePwDialog();
+      updateShareButton();
       await ensureMedia(); if (call) return;
       bind(peer.call(PREFIX + room, outStream()));
     } else if (d.type === 'full') {
