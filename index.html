@@ -576,6 +576,31 @@
   }
   const PEER_OPTS = { config: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 2, sdpSemantics: 'unified-plan' } };
 
+  // Prefer VP8 where both peers support it; some Windows decoders fail on Safari's H.264 stream.
+  function preferVp8(sdp) {
+    const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
+    const lines = sdp.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith('m=video ')) continue;
+      let end = i + 1;
+      while (end < lines.length && !lines[end].startsWith('m=')) end++;
+      const formats = lines[i].trim().split(/\s+/).slice(3);
+      const codecs = new Map(), rtxApt = new Map();
+      for (let j = i + 1; j < end; j++) {
+        let match = /^a=rtpmap:(\d+)\s+([^/\s]+)/i.exec(lines[j]);
+        if (match) codecs.set(match[1], match[2].toLowerCase());
+        match = /^a=fmtp:(\d+)\s+.*?\bapt=(\d+)(?:;|$)/i.exec(lines[j]);
+        if (match) rtxApt.set(match[1], match[2]);
+      }
+      const vp8 = formats.filter(pt => codecs.get(pt) === 'vp8');
+      if (!vp8.length) continue;
+      const vp8Rtx = formats.filter(pt => codecs.get(pt) === 'rtx' && vp8.includes(rtxApt.get(pt)));
+      const preferred = [...vp8, ...vp8Rtx, ...formats.filter(pt => !vp8.includes(pt) && !vp8Rtx.includes(pt))];
+      lines[i] = lines[i].trim().split(/\s+/).slice(0, 3).concat(preferred).join(' ');
+    }
+    return lines.join(eol);
+  }
+
   let stream, peer, call, room, entering = false;
   let guestId = null, guestConn = null; // host side: the one person allowed in
   let statsTimer = null, prev = {}, info = null, devErrKey = null, sinkId = '';
@@ -672,7 +697,7 @@
       if (call) { const o = call; call = null; try { o.close(); } catch (_) {} } // guest redialled after a network drop
       await ensureMedia();
       if (me !== peer) return;
-      c.answer(outStream());
+      c.answer(outStream(), { sdpTransform: preferVp8 });
       bind(c);
     });
     peer.on('error', err => {
@@ -2605,7 +2630,7 @@
       gateDone = true; hidePwDialog();
       updateShareButton();
       await ensureMedia(); if (call) return;
-      bind(peer.call(PREFIX + room, outStream()));
+      bind(peer.call(PREFIX + room, outStream(), { sdpTransform: preferVp8 }));
     } else if (d.type === 'full') {
       gateDone = true; setStatus('full');
       try { peer.destroy(); } catch (_) {}
