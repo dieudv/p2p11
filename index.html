@@ -209,6 +209,7 @@
   .bigflip-btn:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   .bigflip-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .call.flip-remote #remote, .call.flip-local #local { scale: -1 1; }
+  .call.ui-hidden .bar, .call.ui-hidden .bigflip-btn, .call.ui-hidden .status { display: none; }
 </style>
 </head>
 <body>
@@ -2745,6 +2746,17 @@
     e.preventDefault();
     b.click();
   });
+
+  // ---------- Tap empty space to hide/show the control buttons ----------
+  $('call').addEventListener('click', e => {
+    const el = e.target;
+    if (el.closest('button, input, select, a, .panel, .menu, .bar, .invcard, .ytcard, .ytinvite, .pill, .rz')) return;
+    if (swapped ? el === remoteEl : el.closest('#localBox')) return; // these toggle the swap, not the controls
+    if ($('localBox')._dragged || (el === remoteEl && remoteEl._cameraDragClick)) return; // end of a drag, not a tap
+    const hide = !$('call').classList.contains('ui-hidden');
+    $('call').classList.toggle('ui-hidden', hide);
+    if (hide) togglePanel(null); // close open panels/menu together with the bar
+  }, true);
 
   // Opened via a room link: prefill the code and wait for a click so the browser can ask for camera permission.
   const fromHash = clean(location.hash.slice(1));
