@@ -579,6 +579,7 @@
 
   // Prefer VP8 where both peers support it; some Windows decoders fail on Safari's H.264 stream.
   function preferVp8(sdp) {
+    sdp = sdp.replace(/a=extmap:\d+ urn:3gpp:video-orientation\r?\n/gi, '');
     const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
     const lines = sdp.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
